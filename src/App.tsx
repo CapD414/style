@@ -30,6 +30,7 @@ import { GoogleGenAI, Type } from "@google/genai";
 import ReactMarkdown from 'react-markdown';
 import { cn } from './lib/utils';
 import { AnalysisResult, StyleAnalysis, GeneratedPrompt, StructuralAnalysis } from './types';
+import { supabase } from './lib/supabase';
 
 // Set up PDF.js worker using the local worker file from the package
 // @ts-ignore - Vite handled import
@@ -43,26 +44,43 @@ export default function App() {
   const [inputText, setInputText] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [result, setResult] = useState<AnalysisResult | null>(null);
-  const [history, setHistory] = useState<AnalysisResult[]>(() => {
-    // Initialize directly from localStorage to avoid race conditions
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        try {
-          return JSON.parse(saved);
-        } catch (e) {
-          console.error("Failed to parse history", e);
-        }
-      }
-    }
-    return [];
-  });
+  const [history, setHistory] = useState<AnalysisResult[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [copied, setCopied] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Load history from Supabase (with localStorage fallback)
+  useEffect(() => {
+    const loadHistory = async () => {
+      // 1. Try Supabase first
+      if (supabase) {
+        const { data, error } = await supabase
+          .from('analysis_history')
+          .select('*')
+          .order('timestamp', { ascending: false });
+        
+        if (!error && data) {
+          setHistory(data as AnalysisResult[]);
+          return;
+        }
+      }
+
+      // 2. Fallback to localStorage
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        try {
+          setHistory(JSON.parse(saved));
+        } catch (e) {
+          console.error("Failed to parse history", e);
+        }
+      }
+    };
+
+    loadHistory();
+  }, []);
 
   // Save history to localStorage whenever it changes
   useEffect(() => {
@@ -122,7 +140,11 @@ export default function App() {
     setError(null);
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+      if (!apiKey) {
+        throw new Error('VITE_GEMINI_API_KEY is missing in environment variables');
+      }
+      const ai = new GoogleGenAI({ apiKey });
       
       const response = await ai.models.generateContent({
         model: GEMINI_MODEL,
@@ -221,6 +243,14 @@ export default function App() {
       
       setResult(newResult);
       setHistory(prev => [newResult, ...prev]);
+
+      // Sync to Supabase if available
+      if (supabase) {
+        const { error: syncError } = await supabase
+          .from('analysis_history')
+          .upsert(newResult);
+        if (syncError) console.error('Supabase sync error:', syncError);
+      }
     } catch (err) {
       console.error('AI Analysis error:', err);
       setError('分析失败，请稍后重试。');
@@ -268,9 +298,18 @@ export default function App() {
     if (window.innerWidth < 768) setIsSidebarOpen(false);
   };
 
-  const deleteHistoryItem = (e: React.MouseEvent, id: string) => {
+  const deleteHistoryItem = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
     setHistory(prev => prev.filter(item => item.id !== id));
+    
+    if (supabase) {
+      const { error } = await supabase
+        .from('analysis_history')
+        .delete()
+        .eq('id', id);
+      if (error) console.error('Supabase delete error:', error);
+    }
+
     if (result?.id === id) {
       reset();
     }
