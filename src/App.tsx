@@ -63,7 +63,12 @@ export default function App() {
           .order('timestamp', { ascending: false });
         
         if (!error && data) {
-          setHistory(data as AnalysisResult[]);
+          // Map snake_case back to camelCase for the UI
+          const mappedData = data.map((item: any) => ({
+            ...item,
+            inputText: item.input_text
+          }));
+          setHistory(mappedData as AnalysisResult[]);
           return;
         }
       }
@@ -144,7 +149,7 @@ export default function App() {
       if (!apiKey) {
         throw new Error('VITE_GEMINI_API_KEY is missing in environment variables');
       }
-      const ai = new GoogleGenAI({ apiKey });
+      const ai = new GoogleGenAI(apiKey);
       
       const response = await ai.models.generateContent({
         model: GEMINI_MODEL,
@@ -246,9 +251,20 @@ export default function App() {
 
       // Sync to Supabase if available
       if (supabase) {
+        // Map camelCase to snake_case for SQL compatibility
+        const supabaseData = {
+          id: newResult.id,
+          title: newResult.title,
+          timestamp: newResult.timestamp,
+          input_text: newResult.inputText,
+          analysis: newResult.analysis,
+          structure: newResult.structure,
+          prompt: newResult.prompt
+        };
+
         const { error: syncError } = await supabase
           .from('analysis_history')
-          .upsert(newResult);
+          .upsert(supabaseData);
         if (syncError) console.error('Supabase sync error:', syncError);
       }
     } catch (err) {
