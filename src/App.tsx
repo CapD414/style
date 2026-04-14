@@ -31,10 +31,9 @@ import { cn } from './lib/utils';
 import { AnalysisResult, StyleAnalysis, GeneratedPrompt, StructuralAnalysis } from './types';
 import { supabase } from './lib/supabase';
 
-// Set up PDF.js worker using the local worker file from the package
-// @ts-ignore - Vite handled import
-import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
-pdfjs.GlobalWorkerOptions.workerSrc = pdfjsWorker;
+// Set up PDF.js worker using a reliable CDN
+const PDFJS_VERSION = pdfjs.version || '5.6.205';
+pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${PDFJS_VERSION}/build/pdf.worker.min.js`;
 
 const STORAGE_KEY = "style_echo_history";
 
@@ -49,6 +48,16 @@ export default function App() {
   const [fileName, setFileName] = useState<string | null>(null);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
+      console.error('Unhandled rejection:', event.reason);
+      setError(`发生未知错误: ${event.reason?.message || '请检查控制台'}`);
+    };
+
+    window.addEventListener('unhandledrejection', handleUnhandledRejection);
+    return () => window.removeEventListener('unhandledrejection', handleUnhandledRejection);
+  }, []);
 
   // Load history from Supabase (with localStorage fallback)
   useEffect(() => {
@@ -96,23 +105,37 @@ export default function App() {
   };
 
   const extractTextFromPdf = async (file: File): Promise<string> => {
-    const arrayBuffer = await file.arrayBuffer();
-    const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise;
-    let fullText = '';
-    
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i);
-      const textContent = await page.getTextContent();
-      const pageText = textContent.items.map((item: any) => item.str).join(' ');
-      fullText += pageText + '\n';
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      if (!arrayBuffer || arrayBuffer.byteLength === 0) {
+        throw new Error('文件内容为空');
+      }
+      const loadingTask = pdfjs.getDocument({ data: arrayBuffer });
+      const pdf = await loadingTask.promise;
+      let fullText = '';
+      
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const textContent = await page.getTextContent();
+        const pageText = textContent.items.map((item: any) => item.str).join(' ');
+        fullText += pageText + '\n';
+      }
+      
+      return fullText;
+    } catch (error) {
+      console.error('Error extracting text from PDF:', error);
+      throw new Error('无法从 PDF 中提取文本，请确保文件未加密。');
     }
-    
-    return fullText;
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    console.log('File upload triggered');
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file) {
+      console.log('No file selected');
+      return;
+    }
+    console.log('File selected:', file.name, file.type, file.size);
 
     if (file.type !== 'application/pdf') {
       setError('仅支持 PDF 格式文件');
@@ -143,7 +166,9 @@ export default function App() {
     setError(null);
 
     try {
-      const response = await fetch('/api/analyze', {
+      console.log('Sending request to /api/analyze...');
+      const apiUrl = window.location.origin + '/api/analyze';
+      const response = await fetch(apiUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -151,12 +176,25 @@ export default function App() {
         body: JSON.stringify({ inputText }),
       });
 
+      console.log('Response status:', response.status);
+
       if (!response.ok) {
-        const errorData = await response.json();
+        let errorData;
+        try {
+          errorData = await response.json();
+        } catch (e) {
+          errorData = { error: `HTTP Error ${response.status}` };
+        }
         throw new Error(errorData.error || '分析失败，请检查服务器配置或网络');
       }
 
-      const data = await response.json();
+      let data;
+      try {
+        data = await response.json();
+      } catch (parseError) {
+        console.error('JSON Parse Error:', parseError);
+        throw new Error('服务器返回了无效的响应格式，请稍后重试。');
+      }
       const newResult: AnalysisResult = {
         ...data,
         id: Date.now().toString(),

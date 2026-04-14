@@ -1,8 +1,9 @@
+import "dotenv/config";
 import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -12,6 +13,10 @@ async function startServer() {
   const PORT = 3000;
 
   app.use(express.json({ limit: '50mb' }));
+
+  app.get("/api/health", (req, res) => {
+    res.json({ status: "ok", message: "Server is running" });
+  });
 
   // Gemini API Endpoint
   app.post("/api/analyze", async (req, res) => {
@@ -23,7 +28,7 @@ async function startServer() {
         return res.status(500).json({ error: "GEMINI_API_KEY is not configured on the server." });
       }
 
-      const genAI = new GoogleGenAI(apiKey);
+      const genAI = new GoogleGenerativeAI(apiKey);
       const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
 
       const prompt = `你是一位顶级的语言学家、提示词工程师和内容策略专家。请分析以下文本的写作风格和文章架构，并生成一个针对 Gemini 优化的模仿 Prompt。
@@ -59,10 +64,21 @@ async function startServer() {
       const result = await model.generateContent(prompt);
       const response = await result.response;
       const text = response.text();
+      console.log("Gemini Raw Response:", text);
       
-      // Clean up potential markdown code blocks
-      const jsonStr = text.replace(/```json\n?/, '').replace(/```\n?/, '').trim();
-      res.json(JSON.parse(jsonStr));
+      // Extract JSON using regex to handle potential extra text or markdown wrappers
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        throw new Error("AI 返回的内容不是有效的 JSON 格式");
+      }
+      
+      const jsonStr = jsonMatch[0];
+      try {
+        res.json(JSON.parse(jsonStr));
+      } catch (parseError) {
+        console.error("JSON Parse Error:", parseError, "Raw JSON string:", jsonStr);
+        throw new Error("AI 返回了格式错误的 JSON 数据，请重试。");
+      }
     } catch (error) {
       console.error("Gemini API Error:", error);
       res.status(500).json({ error: error instanceof Error ? error.message : "Internal Server Error" });
