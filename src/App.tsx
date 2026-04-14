@@ -26,7 +26,6 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import * as pdfjs from 'pdfjs-dist';
-import { GoogleGenAI, Type } from "@google/genai";
 import ReactMarkdown from 'react-markdown';
 import { cn } from './lib/utils';
 import { AnalysisResult, StyleAnalysis, GeneratedPrompt, StructuralAnalysis } from './types';
@@ -37,7 +36,6 @@ import { supabase } from './lib/supabase';
 import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
 pdfjs.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
-const GEMINI_MODEL = "gemini-3.1-pro-preview";
 const STORAGE_KEY = "style_echo_history";
 
 export default function App() {
@@ -145,100 +143,20 @@ export default function App() {
     setError(null);
 
     try {
-      const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-      if (!apiKey) {
-        throw new Error('VITE_GEMINI_API_KEY is missing in environment variables');
-      }
-      const ai = new GoogleGenAI(apiKey);
-      
-      const response = await ai.models.generateContent({
-        model: GEMINI_MODEL,
-        contents: [
-          {
-            role: "user",
-            parts: [{
-              text: `你是一位顶级的语言学家、提示词工程师和内容策略专家。请分析以下文本的写作风格和文章架构，并生成一个针对 Gemini 优化的模仿 Prompt。
-              
-              待分析文本：
-              """
-              ${inputText.slice(0, 10000)} 
-              """
-              
-              你的任务：
-              1. 深入分析文本的语气、词汇偏好、句式结构、节奏感和独特癖好。
-              2. 深度拆解文章的写作框架：包括逻辑流向（起承转合）、极其详细的逐段/逐块大纲、以及作者的排版与设计意图。
-              3. 生成一个针对 Gemini 优化的 System Instruction（系统指令），确保 Gemini 能精准模仿这种笔触，避开 AI 常见的机械感。
-              4. 提供一个用户 Prompt 模板。模板结构应为：[风格指令] + [任务要求] + [占位符：请在此处粘贴你的原始素材/背景资料]。
-              5. 自动为这次分析取一个简短有力的标题（15字以内）。
-              
-              请以 JSON 格式返回结果，结构如下：
-              {
-                "title": "自动生成的标题",
-                "analysis": {
-                  "tone": "语气描述",
-                  "vocabulary": "词汇特征",
-                  "sentenceStructure": "句式结构",
-                  "rhythm": "节奏感描述",
-                  "uniqueTraits": ["独特癖好1", "独特癖好2"],
-                  "overallSummary": "总体风格总结"
-                },
-                "structure": {
-                  "logicFlow": "逻辑流向描述",
-                  "detailedOutline": ["大纲步骤1", "大纲步骤2", "..."],
-                  "designIntent": "设计意图分析"
-                },
-                "prompt": {
-                  "systemInstruction": "针对 Gemini 的详细系统指令",
-                  "userPromptTemplate": "用户使用的 Prompt 模板，末尾预留资料粘贴区",
-                  "exampleOutput": "使用该风格写一段话作为示例"
-                }
-              }`
-            }]
-          }
-        ],
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              title: { type: Type.STRING },
-              analysis: {
-                type: Type.OBJECT,
-                properties: {
-                  tone: { type: Type.STRING },
-                  vocabulary: { type: Type.STRING },
-                  sentenceStructure: { type: Type.STRING },
-                  rhythm: { type: Type.STRING },
-                  uniqueTraits: { type: Type.ARRAY, items: { type: Type.STRING } },
-                  overallSummary: { type: Type.STRING }
-                },
-                required: ["tone", "vocabulary", "sentenceStructure", "rhythm", "uniqueTraits", "overallSummary"]
-              },
-              structure: {
-                type: Type.OBJECT,
-                properties: {
-                  logicFlow: { type: Type.STRING },
-                  detailedOutline: { type: Type.ARRAY, items: { type: Type.STRING } },
-                  designIntent: { type: Type.STRING }
-                },
-                required: ["logicFlow", "detailedOutline", "designIntent"]
-              },
-              prompt: {
-                type: Type.OBJECT,
-                properties: {
-                  systemInstruction: { type: Type.STRING },
-                  userPromptTemplate: { type: Type.STRING },
-                  exampleOutput: { type: Type.STRING }
-                },
-                required: ["systemInstruction", "userPromptTemplate", "exampleOutput"]
-              }
-            },
-            required: ["title", "analysis", "structure", "prompt"]
-          }
-        }
+      const response = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ inputText }),
       });
 
-      const data = JSON.parse(response.text || '{}');
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || '分析失败，请检查服务器配置或网络');
+      }
+
+      const data = await response.json();
       const newResult: AnalysisResult = {
         ...data,
         id: Date.now().toString(),
@@ -269,7 +187,7 @@ export default function App() {
       }
     } catch (err) {
       console.error('AI Analysis error:', err);
-      setError('分析失败，请稍后重试。');
+      setError(err instanceof Error ? err.message : '分析失败，请稍后重试。');
     } finally {
       setIsAnalyzing(false);
     }
