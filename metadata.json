@@ -1,0 +1,5 @@
+{
+  "name": "StyleEcho - 文笔回响",
+  "description": "分析文本或PDF，提取独特的写作风格并生成针对Gemini优化的模仿创作Prompt。",
+  "requestFramePermissions": []
+}
